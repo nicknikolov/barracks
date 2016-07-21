@@ -547,3 +547,8 @@ tape('hooks: onError', (t) => {
   t.test('should have a default err handler')
   t.test('should not call itself')
 })
+
+tape('wrappers: wrapSubscriptions')
+tape('wrappers: wrapReducers')
+tape('wrappers: wrapEffects')
+tape('wrappers: wrapInitialState')
