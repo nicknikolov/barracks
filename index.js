@@ -3,6 +3,7 @@ const assert = require('assert')
 const xtend = require('xtend')
 
 const applyHook = require('./apply-hook')
+const wrapHook = require('./wrap-hook')
 
 module.exports = dispatcher
 
@@ -16,7 +17,12 @@ function dispatcher (hooks) {
   const onActionHooks = []
   const onErrorHooks = []
 
-  useHooks(hooks)
+  const subscriptionWraps = []
+  const initialStateWraps = []
+  const reducerWraps = []
+  const effectWraps = []
+
+  use(hooks)
 
   var reducersCalled = false
   var effectsCalled = false
@@ -32,12 +38,12 @@ function dispatcher (hooks) {
   start.model = setModel
   start.state = getState
   start.start = start
-  start.use = useHooks
+  start.use = use
   return start
 
   // push an object of hooks onto an array
   // obj -> null
-  function useHooks (hooks) {
+  function use (hooks) {
     assert.equal(typeof hooks, 'object', 'barracks.use: hooks should be an object')
     assert.ok(!hooks.onError || typeof hooks.onError === 'function', 'barracks.use: onError should be undefined or a function')
     assert.ok(!hooks.onAction || typeof hooks.onAction === 'function', 'barracks.use: onAction should be undefined or a function')
@@ -46,6 +52,10 @@ function dispatcher (hooks) {
     if (hooks.onError) onErrorHooks.push(wrapOnError(hooks.onError))
     if (hooks.onAction) onActionHooks.push(hooks.onAction)
     if (hooks.onStateChange) onStateChangeHooks.push(hooks.onStateChange)
+    if (hooks.wrapSubscriptions) subscriptionWraps.push(hooks.wrapSubscriptions)
+    if (hooks.wrapReducers) reducerWraps.push(hooks.wrapReducers)
+    if (hooks.initialState) initialStateWraps.push(hooks.initialState)
+    if (hooks.wrapEffects) effectWraps.push(hooks.wrapEffects)
   }
 
   // push a model to be initiated
@@ -92,17 +102,28 @@ function dispatcher (hooks) {
     models.forEach(function (model) {
       const ns = model.namespace
       if (!stateCalled && model.state && opts.state !== false) {
-        apply(ns, model.state, _state)
+        apply(ns, model.state, _state, function (cb) {
+          return wrapHook(cb, initialStateWraps)
+        })
       }
       if (!reducersCalled && model.reducers && opts.reducers !== false) {
-        apply(ns, model.reducers, reducers)
+        apply(ns, model.reducers, reducers, function (cb) {
+          return wrapHook(cb, reducerWraps)
+        })
       }
       if (!effectsCalled && model.effects && opts.effects !== false) {
-        apply(ns, model.effects, effects)
+        apply(ns, model.effects, effects, function (cb) {
+          return wrapHook(cb, effectWraps)
+        })
       }
       if (!subsCalled && model.subscriptions && opts.subscriptions !== false) {
-        apply(ns, model.subscriptions, subscriptions, createSend, function (err) {
-          applyHook(onErrorHooks, err)
+        apply(ns, model.subscriptions, subscriptions, function (cb, key) {
+          const send = createSend('subscription: ' + (ns ? ns + ':' + key : key))
+          cb = wrapHook(cb, subscriptionWraps)
+          cb(send, function (err) {
+            applyHook(onErrorHooks, err)
+          })
+          return cb
         })
       }
     })
@@ -210,18 +231,12 @@ function dispatcher (hooks) {
 // optionally contains a namespace
 // which is used to nest properties.
 // (str, obj, obj, fn?) -> null
-function apply (ns, source, target, createSend, done) {
+function apply (ns, source, target, wrap) {
   if (ns && !target[ns]) target[ns] = {}
   Object.keys(source).forEach(function (key) {
-    if (ns) {
-      target[ns][key] = source[key]
-    } else {
-      target[key] = source[key]
-    }
-    if (createSend && done) {
-      const send = createSend('subscription: ' + (ns ? ns + ':' + key : key))
-      source[key](send, done)
-    }
+    const cb = wrap ? wrap(source[key], key) : source[key]
+    if (ns) target[ns][key] = cb
+    else target[key] = cb
   })
 }
 
